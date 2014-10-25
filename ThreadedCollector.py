@@ -271,7 +271,8 @@ class ToolkitStream(Stream):
 
 if __name__ == "__main__":
     try:
-        collection_type = sys.argv[1]
+        # collection_type = sys.argv[1]
+        collection_type = 'track'
     except IndexError:
         print "To run: python ThreadedCollector.py {track | follow}"
         sys.exit()
@@ -287,10 +288,10 @@ if __name__ == "__main__":
     Config.read(PLATFORM_CONFIG_FILE)
 
     # Grabs logging info (directory, filename) from config file
-    logDir = Config.get('files', 'log_dir', 0)
+    # logDir = Config.get('files', 'log_dir', 0)
     logConfigFile = Config.get('files', 'log_config_file', 0)
     logging.config.fileConfig(logConfigFile)
-    logging.addLevelName('root', config_name)
+    # logging.addLevelName('root', config_name)
     logger = logging.getLogger(config_name)
 
     # Sets current date as starting point
@@ -343,14 +344,14 @@ if __name__ == "__main__":
         i += 1
 
         # Finds Mongo collection & grabs signal info
-        # If Mongo is offline throws an acception and continues
+        # If Mongo is offline throws an exception and continues
         exception = None
         try:
             mongoConfigs = mongo_config.find_one({"module" : config_name})
             runCollector = mongoConfigs['run']
             collectSignal = mongoConfigs['collect']
             updateSignal = mongoConfigs['update']
-        except Exception, exception:
+        except Exception as exception:
             print 'Mongo connection refused with exception: %s' % exception
             logger.error('Mongo connection refused with exception: %s' % exception)
 
