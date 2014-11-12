@@ -30,99 +30,108 @@ def ck_coded_url(urlstring):
 	else:
 		return None
 
-
+def parse_url(url_entity):
+    url_code = None
+    if 'long-url' in url_entity and url_entity['long-url'] is not None:
+        url_code = ck_coded_url(url_entity['long-url'])
+    elif "expanded_url" in url_entity and url_entity['expanded_url'] is not None:
+        url_code = ck_coded_url(url_entity['expanded_url'])
+    elif "url" in url:
+        url_code = ck_coded_url(url_entity['url'])
+    if url_code:
+        url_entity['code'] = url_code[0]
+        url_entity['hashtag'] = url_code[1]
+        return url_entity['code']
+    
 def process_tweet(line, track_list, expand_url=False):
 
     tweet = simplejson.loads(line)
 
     track_set = set(track_list)
-	# List of punct to remove from string for track keyword matching
+    # List of punct to remove from string for track keyword matching
     punct = re.escape('!"$%&\'()*+,-./:;<=>?@[\\]^`{|}~')
 
 
-    if (tweet.has_key("entities") and "created_at" in tweet and "created_at" in tweet['user']):
-        hashtag_num = 0
+    if "entities" in tweet and "created_at" in tweet and "created_at" in tweet['user']:
+
         tweet['hashtags'] = []
-        tweet['mentions'] = []
+        # hashtag_num = 0
+        if "hashtags" in tweet['entities']:         
+            # hashtag_num = len(tweet['entities']['hashtags'])
+            for index in range(len(tweet['entities']['hashtags'])):
+                tweet['hashtags'].append(tweet['entities']['hashtags'][index]['text'].lower())
+            
         tweet['codes'] = []
-
-        if "hashtags" in tweet['entities']:
-			hashtag_num = len(tweet['entities']['hashtags'])
-			for index in range(len(tweet['entities']['hashtags'])):
-				tweet['hashtags'].append(tweet['entities']['hashtags'][index]['text'].lower())
-
-
         urls_num = 0
-        coded_url_num = 0
-        urls = []
         if "urls" in tweet['entities']:
-			urls_num = len(tweet['entities']['urls'])
-			if expand_url:
-				for urls in tweet['entities']['urls']:
-					url_code = None
-					if 'long-url' in urls and urls['long-url'] is not None:
-						url_code = ck_coded_url(urls['long-url'])
-					elif "expanded_url" in urls and urls['expanded_url'] is not None:
-						url_code = ck_coded_url(urls['expanded_url'])
-					elif "url" in urls:
-						url_code = ck_coded_url(urls['url'])
-					if url_code:
-						urls['code'] = url_code[0]
-						urls['hashtag'] = url_code[1]
-						tweet['codes'].append(url_code[0])
-			coded_url_num = len(tweet['codes'])
+            urls_num = len(tweet['entities']['urls'])
+            if expand_url:
+                for url in tweet['entities']['urls']:
+                    tweet['codes'] = tweet['codes'].append(parse_url(url))              
+            # coded_url_num = len(tweet['codes'])
 
-        mentions_num = 0
-        if "user_mentions" in tweet['entities']:
-			mentions_num = len(tweet['entities']['user_mentions'])
-			for index in range(len(tweet['entities']['user_mentions'])):
-				if "screen_name" in tweet['entities']['user_mentions'][index]:
-					tweet['mentions'].append(tweet['entities']['user_mentions'][index]['screen_name'].lower())
+        tweet['mentions'] = []
+        # mentions_num = 0
+        if "user_mentions" in tweet['entities']:         
+            # mentions_num = len(tweet['entities']['user_mentions'])
+            for index in range(len(tweet['entities']['user_mentions'])):
+                if "screen_name" in tweet['entities']['user_mentions'][index]:
+                    tweet['mentions'].append(tweet['entities']['user_mentions'][index]['screen_name'].lower())
+                    
+        tweet['track_kw'] = {}
+        # Check to see if we have a retweet
+        if "retweeted_status" in tweet and "entities" in tweet['retweeted_status']:
+            # In case of the retweet losing part of text or entities contained in its original tweet
+            rt_hashtags = []
+            rt_mentions = []
+            
+            for index in range(len(tweet['retweeted_status']['entities']['hashtags'])):
+                rt_hashtags.append(tweet['retweeted_status']['entities']['hashtags'][index]['text'].lower())
+            for index in range(len(tweet['retweeted_status']['entities']['user_mentions'])):
+                rt_mentions.append(tweet['retweeted_status']['entities']['user_mentions'][index]['screen_name'].lower())
+                           
+            tweet['hashtags'] = list(set(tweet['hashtags']).union(set(rt_hashtags)))
+            tweet['mentions'] = list(set(tweet['mentions']).union(set(rt_mentions)))
 
-        tweet['counts'] = {
-							'urls': urls_num,
-							'hashtags': hashtag_num,
-							'user_mentions': mentions_num,
-							'coded_urls': coded_url_num
-							};
+            if urls_num == 0:
+                urls_num = len(tweet['retweeted_status']['entities']['urls'])
+            else:
+                urls_num = len(set(tweet['entities']['urls']['url']).union(set(tweet['retweeted_status']['entities']['urls']['url'])))
+            if expand_url:
+                for url in tweet['retweeted_status']['entities']['urls']:
+                    tweet['codes'] = tweet['codes'].append(parse_url(url))
+                tweet['codes'] = list(set(tweet['codes']))
+            
+            # Track rule matches in text
+            tweet_text = re.sub('[%s]' % punct, ' ', tweet['text'])
+            rt_text = re.sub('[%s]' % punct, ' ', tweet['retweeted_status']['text'])
+            tweet_text = tweet_text.lower().split()
+            rt_text = rt_text.lower().split()
+            union_text = set(rt_text).union(set(tweet_text))
+            tweet['track_kw']['text'] = list(union_text.intersection(track_set))
+        else:
+            # Track rule matches in text      
+            tweet_text = re.sub('[%s]' % punct, ' ', tweet['text'])
+            tweet_text = tweet_text.lower().split()
+            tweet['track_kw']['text'] = list(set(tweet_text).intersection(track_set))
 
+        # Track rule matches in hashtags and mentions
+        tweet['track_kw']['hashtags'] = list(set(tweet['hashtags']).intersection(track_set))
+        tweet['track_kw']['mentions'] = list(set(tweet['mentions']).intersection(track_set))
+     
         tweet['hashtags'].sort()
+        tweet['codes'].sort()
         tweet['mentions'].sort()
 
+        tweet['counts'] = {
+            'urls': urls_num,
+            'hashtags': len(tweet['hashtags']),
+            'user_mentions': len(tweet['mentions']),
+            'coded_urls': len(tweet['codes'])
+            };
+
         tweet['text_hash'] = hashlib.md5(tweet['text'].encode("utf-8")).hexdigest()
-
-		# Check to see if we have a retweet
-        if tweet.has_key("retweeted_status") and tweet['truncated']== True:
-			# Track rule matches
-			tweet['track_kw'] = {}
-
-			rt_hashtags = []
-			rt_mentions = []
-
-			for index in range(len(tweet['retweeted_status']['entities']['hashtags'])):
-				rt_hashtags.append(tweet['retweeted_status']['entities']['hashtags'][index]['text'].lower())
-			for index in range(len(tweet['retweeted_status']['entities']['user_mentions'])):
-				rt_mentions.append(tweet['retweeted_status']['entities']['user_mentions'][index]['screen_name'].lower())
-			untion_hashtags = set(tweet['hashtags']).union(set(rt_hashtags))
-			untion_mentions = set(tweet['mentions']).union(set(rt_hashtags))
-			tweet['track_kw']['hashtags'] = list(untion_hashtags.intersection(track_set))
-			tweet['track_kw']['mentions'] = list(untion_mentions.intersection(track_set))
-			tweet_text = re.sub('[%s]' % punct, ' ', tweet['text'])
-			rt_text = re.sub('[%s]' % punct, ' ', tweet['retweeted_status']['text'])
-			tweet_text = tweet_text.lower().split()
-			rt_text = rt_text.lower().split()
-			union_text = set(rt_text).union(set(tweet_text))
-			tweet['track_kw']['text'] = list(union_text.intersection(track_set))
-
-        else:
-			# Track rule matches
-			tweet['track_kw'] = {}
-			tweet['track_kw']['hashtags'] = list(set(tweet['hashtags']).intersection(track_set))
-			tweet['track_kw']['mentions'] = list(set(tweet['mentions']).intersection(track_set))
-			tweet_text = re.sub('[%s]' % punct, ' ', tweet['text'])
-			tweet_text = tweet_text.lower().split()
-			tweet['track_kw']['text'] = list(set(tweet_text).intersection(track_set))
-
+        
         # Convert dates 2012-09-22 00:10:46
         # Note that we convert these to a datetime object and then convert back to string
         # and update the tweet with the new string. We do this becuase we want to find

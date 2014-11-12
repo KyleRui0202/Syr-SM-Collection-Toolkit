@@ -117,10 +117,10 @@ if __name__ == '__main__':
     Config = ConfigParser.ConfigParser()
     Config.read(PLATFORM_CONFIG_FILE)
 
-    logDir = Config.get('files', 'log_dir', 0)
+    #logDir = Config.get('files', 'log_dir', 0)
     logConfigFile = Config.get('files', 'log_config_file', 0)
     logging.config.fileConfig(logConfigFile)
-    logging.addLevelName('root', 'preprocess')
+    #logging.addLevelName('root', 'preprocess')
     logger = logging.getLogger('preprocess')
     logger.info('Starting preprocess system')
 

@@ -90,7 +90,7 @@ if __name__ == '__main__':
     Config = ConfigParser.ConfigParser()
     Config.read(PLATFORM_CONFIG_FILE)
 
-    logDir = Config.get('files', 'log_dir', 0)
+    #logDir = Config.get('files', 'log_dir', 0)
     logConfigFile = Config.get('files', 'log_config_file', 0)
     logging.config.fileConfig(logConfigFile)
     logging.addLevelName('root', 'mongo_insert')
@@ -196,7 +196,7 @@ if __name__ == '__main__':
 
                         lost_tweets = lost_tweets + failed_insert_count
                         tweet_total += len(inserted_ids_list)
-        				#print "inserting 5k tweets - %i total" % tweet_total
+                        #print "inserting 5k tweets - %i total" % tweet_total
 
             # make sure we clean up after ourselves
             f.close()
