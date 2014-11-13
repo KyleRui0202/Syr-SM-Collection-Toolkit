@@ -65,6 +65,7 @@ import sys
 
 # Config file includes paths, parameters, and oauth information for this module
 # Complete the directions in "example_platform.ini" for configuration before proceeding
+
 PLATFORM_CONFIG_FILE = 'platform.ini'
 
 # Connect to Mongo
@@ -85,8 +86,10 @@ class fileOutListener(StreamListener):
         self.buffer = ''
         self.tweet_count = 0
         self.delete_count = 0
-        self.rate_limit_count = 0
-        self.error_code = 0
+
+        self.limit_count = 0 # Count of tweets lost due to stream limits
+        self.rate_limit_count = 0 # Count of times our conn is rate limited
+        self.error_code = 0 # Last error code received before forced shutdown
 
         self.tweetsOutFilePath = tweetsOutFilePath
         self.tweetsOutFileDateFrmt = tweetsOutFileDateFrmt
@@ -113,19 +116,19 @@ class fileOutListener(StreamListener):
             msg = ''
             # Rate limiting logging
             if message.get('limit'):
-                self.logger.warning('COLLECTION LISTENER: Rate limiting caused us to miss %s tweets' % (message['limit'].get('track')))
-                print 'Rate limiting caused us to miss %s tweets' % (message['limit'].get('track'))
+                self.logger.warning('COLLECTION LISTENER: Stream rate limiting caused us to miss %s tweets' % (message['limit'].get('track')))
+                print 'Stream rate limiting caused us to miss %s tweets' % (message['limit'].get('track'))
 
                 # Logs info to mongo
                 # TODO - date: datetime_stamp, number_lost: count
                 now = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-                rate_limit_info = { now: int(message['limit'].get('track')) }
+                rate_limit_info = { 'date': now, 'lost_count': int(message['limit'].get('track')) }
                 mongo_config.update({
                     "module":self.config_name},
-                    {"$push": {"rate_limit.counts": rate_limit_info}})
+                    {"$push": {"stream_limit_loss.counts": rate_limit_info}})
 
                 # Total tally
-                self.rate_limit_count += int(message['limit'].get('track'))
+                self.limit_count += int(message['limit'].get('track'))
             # Disconnect message handling
             elif message.get('disconnect'):
                 self.logger.info('COLLECTION LISTENER: Got disconnect: %s' % message['disconnect'].get('reason'))
@@ -138,8 +141,20 @@ class fileOutListener(StreamListener):
             elif message.get('delete'):
                 self.delete_count += 1
 
+                """
                 timestr = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
                 self.delete_tweets.insert({'inserted': timestr, 'delete': message['delete']})
+                """
+
+                timestr = time.strftime(self.tweetsOutFileDateFrmt)
+                JSONfileName = self.tweetsOutFilePath + timestr + '-delete-' + self.tweetsOutFile
+                if not os.path.isfile(JSONfileName):
+                    self.logger.info('Creating new file: %s' % JSONfileName)
+                myFile = open(JSONfileName,'a')
+                myFile.write(json.dumps(message).encode('utf-8'))
+                myFile.write('\n')
+                myFile.close()
+                return True
 
             # Else good to go, read data
             else:
@@ -165,19 +180,21 @@ class fileOutListener(StreamListener):
     # Otherwise, stops stream & logs error info
     def on_error(self, status):
         self.error_code = status
+        now = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
         # Retries if rate limited (420) or unavailable (520)
         if status in [420, 503]:
             if status == 420:
                 self.logger.error('COLLECTION LISTENER: Twitter rate limited our connection with error code: %d. Retrying.' % status)
-                print 'COLLECTION LISTENER: Twitter rate limited our connection with error code: %d. Retrying.' % status
+                print 'COLLECTION LISTENER: Twitter rate limited our connection at %s with error code: %d. Retrying.' % (now, status)
+                self.rate_limit_count += 1
             else:
                 self.logger.error('COLLECTION LISTENER: Twitter service is currently unavailable with error code: %d. Retrying.' % status)
-                print 'COLLECTION LISTENER: Twitter service is currently unavailable with error code: %d. Retrying.' % status
+                print 'COLLECTION LISTENER: Twitter service is currently unavailable at %s with error code: %d. Retrying.' % (now,status)
             return True # Initiates retry backoff loop
         else:
-            self.logger.error('COLLECTION LISTENER: Twitter refused or aborted our connetion with the following error code: %d' % status)
-            print 'COLLECTION LISTENER: Twitter refused or aborted our connetion with the following error code: %d' % status
+            self.logger.error('COLLECTION LISTENER: Twitter refused or aborted our connetion with the following error code: %d. Shutting down.' % status)
+            print 'COLLECTION LISTENER: Twitter refused or aborted our connetion with the following error code: %d. Shutting down at %s' % (status, now)
             return False # Breaks stream
 
 # Extends Tweepy's Stream class to include our logging
@@ -239,8 +256,12 @@ class ToolkitStream(Stream):
                     if self.listener.on_error(resp.status) is False:
                         break
                     error_counter += 1
+                    print 'Retry count %d of %d.' % (error_counter, self.retry_count)
+                    self.logger.info('Retry count %d of %d.' % (error_counter, self.retry_count))
                     if resp.status == 420:
                         self.retry_time = max(self.retry_420_start, self.retry_time)
+                    print 'Retry time: %d seconds.' % self.retry_time
+                    self.logger.info('Retry time: %d seconds.' % self.retry_time)
                     sleep(self.retry_time)
                     self.retry_time = min(self.retry_time * 2, self.retry_time_cap)
                 else:
@@ -267,8 +288,11 @@ class ToolkitStream(Stream):
                 # any other exception is fatal, so kill loop
                 break
 
-        # cleanup
-        # Mongo update added in case break caused by error
+        # Cleanup
+        # 1) Mongo update added in case break caused by error
+        # 2) Signal set to shutdown stream connection thread
+        # 3) Running set to false
+        e.set()
         mongo_config.update({"module" : self.listener.config_name}, {'$set' : {'collect': 0}})
         self.running = False
         if conn:
@@ -316,12 +340,32 @@ if __name__ == "__main__":
     Config = ConfigParser.ConfigParser()
     Config.read(PLATFORM_CONFIG_FILE)
 
-    # Grabs logging info (directory, filename) from config file
-    # logDir = Config.get('files', 'log_dir', 0)
+    # Grabs logging director info & creates if doesn't exist
+    logDir = Config.get('files', 'log_dir', 0)
+    if not os.path.exists(logDir):
+        os.makedirs(logDir)
+
+    # Creates logger w/ level INFO
+    logger = logging.getLogger(config_name)
+    logger.setLevel(logging.INFO)
+    # Creates rotating file handler w/ level INFO
+    fh = logging.handlers.TimedRotatingFileHandler('./logs/log-' + collection_type + '.out', 'D', 1, 30, None, False, False)
+    fh.setLevel(logging.INFO)
+    # Creates formatter and applies to rotating handler
+    format = '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'
+    datefmt = '%m-%d %H:%M'
+    formatter = logging.Formatter(format, datefmt)
+    fh.setFormatter(formatter)
+    # Finishes by adding the rotating, formatted handler
+    logger.addHandler(fh)
+
+    """
     logConfigFile = Config.get('files', 'log_config_file', 0)
     logging.config.fileConfig(logConfigFile)
     # logging.addLevelName('root', config_name)
-    logger = logging.getLogger(config_name)
+    logging.TimedRotatingFileHandler('.logs/log-' + collection_type + '.out', 'M', 1, 30, None, False, False)
+    logger = logging.getLogger(logger_name)
+    """
 
     # Sets current date as starting point
     tmpDate = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -353,10 +397,18 @@ if __name__ == "__main__":
 
     # Sets Mongo collection; sets rate_limitng & error counts to 0
     mongoConfigs = mongo_config.find_one({"module" : config_name})
-    mongo_config.update({
-        "module" : config_name},
-        {'$set' : {'rate_limit': { 'counts': [], 'total': 0 }}})
-    mongo_config.update({"module" : config_name}, {'$set' : {'error_code': 0}})
+    if 'stream_limit_loss' not in mongoConfigs:
+        mongo_config.update({
+            "module" : config_name},
+            {'$set' : { 'stream_limit_loss': { 'counts': [], 'total': 0 }}})
+
+    if 'rate_limit_count' not in mongoConfigs:
+        mongo_config.update({
+            'module': config_name},
+            {'$set': {'rate_limit_count': 0}})
+
+    if 'error_code' not in mongoConfigs:
+        mongo_config.update({"module" : config_name}, {'$set' : {'error_code': 0}})
 
     # Should be 1 by default
     runCollector = mongoConfigs['run']
@@ -408,22 +460,34 @@ if __name__ == "__main__":
 
             # Send stream disconnect signal, kills thread
             stream.disconnect()
+            wait_count = 0
+            while e.isSet() is False:
+                wait_count += 1
+                print '%d) Waiting on collection thread shutdown' % wait_count
+                sleep(wait_count)
+
             collectingData = False
 
             logger.info('COLLECTION THREAD: stream stopped after %d tweets' % l.tweet_count)
             logger.info('COLLECTION THREAD: collected %d error tweets' % l.delete_count)
             print 'COLLECTION THREAD: collected %d error tweets' % l.delete_count
-            logger.info('COLLECTION THREAD: lost %d tweets to rate limit' % l.rate_limit_count)
+            logger.info('COLLECTION THREAD: lost %d tweets to stream rate limit' % l.limit_count)
+            print 'COLLECTION THREAD: lost %d tweets to stream rate limit' % l.limit_count
             print 'COLLECTION THREAD: stream stopped after %d tweets' % l.tweet_count
 
             if not l.error_code == 0:
                 mongo_config.update({"module" : config_name}, {'$set' : {'collect': 0}})
                 mongo_config.update({"module" : config_name}, {'$set' : {'error_code': l.error_code}})
 
+            if not l.limit_count == 0:
+                mongo_config.update({
+                    "module" : config_name},
+                    {'$set' : {'stream_limit_loss.total': l.limit_count}})
+
             if not l.rate_limit_count == 0:
                 mongo_config.update({
                     "module" : config_name},
-                    {'$set' : {'rate_limit.total': l.rate_limit_count}})
+                    {'$set' : {'rate_limit_count': l.rate_limit_count}})
 
         # Collection has been signaled & main program thread is running
         # TODO - Check Mongo for handle:ID pairs
