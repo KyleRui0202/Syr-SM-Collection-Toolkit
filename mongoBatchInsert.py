@@ -141,7 +141,6 @@ if __name__ == '__main__':
         if (num_files_in_queue == 0):
             time.sleep( 180 )
         else:
-
             processedTweetsFile = queued_tweets_file_list[0]
             logger.info('Mongo insert file found: %s' % processedTweetsFile)
 

@@ -96,7 +96,7 @@ def process_tweet(line, track_list, expand_url=False):
             if urls_num == 0:
                 urls_num = len(tweet['retweeted_status']['entities']['urls'])
             else:
-                urls_num = len(set(tweet['entities']['urls']['url']).union(set(tweet['retweeted_status']['entities']['urls']['url'])))
+                urls_num = len(set([url['url'] for url in tweet['entities']['urls']]).union(set([url['url'] for url in tweet['retweeted_status']['entities']['urls']])))
             if expand_url:
                 for url in tweet['retweeted_status']['entities']['urls']:
                     tweet['codes'] = tweet['codes'].append(parse_url(url))
