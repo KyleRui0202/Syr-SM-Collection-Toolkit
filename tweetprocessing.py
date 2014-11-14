@@ -116,8 +116,14 @@ def process_tweet(line, track_list, expand_url=False):
             tweet['track_kw']['text'] = list(set(tweet_text).intersection(track_set))
 
         # Track rule matches in hashtags and mentions
-        tweet['track_kw']['hashtags'] = list(set(tweet['hashtags']).intersection(track_set))
-        tweet['track_kw']['mentions'] = list(set(tweet['mentions']).intersection(track_set))
+        parsed_hashtag_list = []
+        for hashtag in tweet['hashtags']:
+            parsed_hashtag_list += hashtag.split('_')
+        tweet['track_kw']['hashtags'] = list(set(parsed_hashtag_list).intersection(track_set))
+        parsed_mention_list = []
+        for mention in tweet['mentions']:
+            parsed_mention_list += mention.split('_')
+        tweet['track_kw']['mentions'] = list(set(parsed_mention_list).intersection(track_set))
      
         tweet['hashtags'].sort()
         tweet['codes'].sort()
