@@ -183,8 +183,11 @@ class fileOutListener(StreamListener):
         now = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 
         # Retries if rate limited (420) or unavailable (520)
-        if status in [420, 503]:
-            if status == 420:
+        if status in [401, 403, 404, 406, 413, 416, 420, 503]:
+            if status in [401, 403, 404, 406, 413, 416]:
+                self.logger.error('COLLECTION LISTENER: Received HTTP error code: %d. Retrying.' % status)
+                print 'COLLECTION LISTENER: Received HTTP error code: %d. Retrying.' % (now, status)
+            elif status == 420:
                 self.logger.error('COLLECTION LISTENER: Twitter rate limited our connection with error code: %d. Retrying.' % status)
                 print 'COLLECTION LISTENER: Twitter rate limited our connection at %s with error code: %d. Retrying.' % (now, status)
                 self.rate_limit_count += 1
@@ -259,9 +262,12 @@ class ToolkitStream(Stream):
                     print 'Retry count %d of %d.' % (error_counter, self.retry_count)
                     self.logger.info('Retry count %d of %d.' % (error_counter, self.retry_count))
                     if resp.status == 420:
-                        self.retry_time = max(self.retry_420_start, self.retry_time)
+                        self.retry_time = max(self.retry_420_start, self.retry_time)                       
                     print 'Retry time: %d seconds.' % self.retry_time
                     self.logger.info('Retry time: %d seconds.' % self.retry_time)
+                    if self.retry_time == self.retry_time_cap:
+                        print 'Retry time has reached its upper threshold %d seconds between reconnects' % self.retry_time_cap
+                        self.logger.warning('Retry time has reached its upper threshold %d seconds between reconnects' % self.retry_time_cap)
                     sleep(self.retry_time)
                     self.retry_time = min(self.retry_time * 2, self.retry_time_cap)
                 else:
@@ -274,18 +280,29 @@ class ToolkitStream(Stream):
                 # If it's not time out treat it like any other exception
                 if isinstance(exc, ssl.SSLError) and not (exc.args and 'timed out' in str(exc.args[0])):
                     exception = exc
+                    print 'TOOLKIT STREAM: Stream is shut down with exception: %s.' % exception
+                    self.logger.error('TOOLKIT STREAM: Stream is shut down with exception: %s.' % exception)
                     break
 
                 if self.listener.on_timeout() == False:
+                    print 'TOOLKIT STREAM: Stream is shut down with exception: %s because there is no appropriate handler for it.' % exc
+                    self.logger.error('TOOLKIT STREAM: Stream is shut down with exception: %s because there is no appropriate handler for it.' % exc)
                     break
                 if self.running is False:
+                    print 'TOOLKIT STREAM: Stream is shut down with exception: %s because Running is already set to false.' % exc
+                    self.logger.error('TOOLKIT STREAM: Stream is shut down with exception: %s because Running is already set to false.' % exc)
                     break
                 conn.close()
+                if self.snooze_time == self.snooze_time_cap:
+                    print 'Snooze time has reached its upper threshold %d seconds between reconnects' % self.snooze_time_cap
+                    self.logger.warning('Snooze time has reached its upper threshold %d seconds between reconnects' % self.snooze_time_cap)
                 sleep(self.snooze_time)
                 self.snooze_time = min(self.snooze_time + self.snooze_time_step,
                                        self.snooze_time_cap)
             except Exception as exception:
                 # any other exception is fatal, so kill loop
+                print 'TOOLKIT STREAM: Stream is shut down with exception: %s.' % exception
+                self.logger.error('TOOLKIT STREAM: Stream is shut down with exception: %s.' % exception)
                 break
 
         # Cleanup
