@@ -255,6 +255,7 @@ class ToolkitStream(Stream):
                 conn.connect()
                 conn.request('POST', self.url, self.body, headers=self.headers)
                 resp = conn.getresponse()
+                
                 if resp.status != 200:
                     if self.listener.on_error(resp.status) is False:
                         break
@@ -301,8 +302,8 @@ class ToolkitStream(Stream):
                                        self.snooze_time_cap)
             except Exception as exception:
                 # any other exception is fatal, so kill loop
-                print 'TOOLKIT STREAM: Stream is shut down with exception: %s.' % exception
-                self.logger.error('TOOLKIT STREAM: Stream is shut down with exception: %s.' % exception)
+                print "TOOLKIT STREAM: Stream is shut down with unexpected error:", sys.exc_info()[0], "\n", sys.exc_info()[1], "\n", sys.exc_info()[2]
+                self.logger.error("TOOLKIT STREAM: Stream is shut down with unexpected error:", sys.exc_info()[0], "\n", sys.exc_info()[1], "\n", sys.exc_info()[2])
                 break
 
         # Cleanup
